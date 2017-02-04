@@ -14,7 +14,7 @@ or in windows.
 For more information, see
     http:mrp3.com/sftardcal.html
 
-
+<pre>
 COPYRIGHT:
 
 Copyright (c) 2011-2013 S.F.T. Inc. - all rights reserved
@@ -40,6 +40,7 @@ header file) to any 3rd party you choose, provided that
 
 a) You include the original copyright, warrantee, and license terms
    in their entirety
+
 b) You do not re-license this source in any manner inconsistent with
    the copyright or license terms.
 
@@ -57,4 +58,5 @@ GPLv2 (or later)
 Please see included 'gpl-2.0.txt' for a copy of version 2.0 of this license.
 Also you can view it at https:www.gnu.org/licenses/gpl-2.0.txt
 
+</pre>
 
