@@ -1,0 +1,50 @@
+# common 'include' for Makefile and BSDmakefile
+# put all of the targets in here.  all of the other stuff must go
+# into the Makefile and BSDmakefile ('if' blocks, defaults)
+
+
+tester:
+	$(MAKE) TESTER=1
+
+
+powersupply:
+	$(MAKE) POWERSUPPLY=1
+
+
+dualserial:
+	$(MAKE) DUALSERIAL=1
+
+
+tester-clean:
+	-@if test -e *.o ; then rm *.o  ; fi
+	-@if test -e sftardcalT ; then rm sftardcalT  ; fi 
+	@sync
+
+
+powersupply-clean:
+	-@if test -e *.o ; then rm *.o  ; fi
+	-@if test -e sftardcalPS ; then rm sftardcalPS  ; fi 
+	@sync
+
+dualserial-clean:
+	-@if test -e *.o ; then rm *.o  ; fi
+	-@if test -e DualSerial ; then rm DualSerial  ; fi 
+	@sync
+
+
+sftardcal-clean:
+	-@if test -e *.o ; then rm *.o  ; fi
+	-@if test -e sftardcal ; then rm sftardcal  ; fi 
+	@sync
+
+
+clean: tester-clean powersupply-clean sftardcal-clean dualserial-clean
+	-@if test -e *.core ; then rm *.core ; fi
+	@sync
+
+
+$(MY_TARGET): sftardcal.c sftardcal.h $(DEVICE_SPECIFIC)
+	$(CC) -o $(MY_TARGET) $(STANDARD_DEFINES) $(DEVICE_DEFINES) sftardcal.c $(DEVICE_SPECIFIC_C)
+	@sync
+
+
