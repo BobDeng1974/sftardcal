@@ -8,7 +8,7 @@
 // 'calibrate_loop()' function.
 //
 // Company web site:  http://mrp3.com/   e-mail:  bobf@mrp3.com
-// 
+//
 // COPYRIGHT:
 //
 // Copyright (c) 2011-2013 S.F.T. Inc. - all rights reserved
@@ -92,6 +92,7 @@
 #endif // WITH_XMODEM
 
 #define DEFAULT_RESET_WAIT 5
+//#define LINUX_SPECIAL_HANDLING
 
 // DEFAULT SERIAL CONFIGURATION:  9600 baud, n, 8, 1 using argv[1] or /dev/ttyU0 as the input
 // option vars
@@ -161,16 +162,60 @@ void conrestore(void);
 int configure_alt_console(HANDLE *piConsole); // NOTE:  'piConsole' must be a valid pointer
 #endif // !WIN32
 
-int do_main(int argc, char *argv[], char *envp[]); // call this to encapsulate 'main'
+int do_main(int argc, char *argv[], char *envp[], HANDLE *piFile, HANDLE *piConsole);
 
-
+#ifndef WIN32
+HANDLE iGlobalFileHandle = -1; // global because FBSD will need to unlock it
+#endif // WIN32
 
 int main(int argc, char *argv[], char *envp[])
 {
-  int iRval = do_main(argc, argv, envp);
+#ifdef WIN32
+HANDLE iFile;
+#endif // WIN32
+HANDLE iConsole; // for non-WIN32 'HANDLE' is defined as 'int'
+int iRval;
 
-#ifndef WIN32
+#ifdef WIN32
+  iFile = iConsole = INVALID_HANDLE_VALUE;
+#else // !WIN32
+  iGlobalFileHandle = iConsole = -1;
+#endif // WIN32
+
+#ifdef WIN32
+
+  iRval = do_main(argc, argv, envp, &iFile, &iConsole);
+
+  if(iFile != INVALID_HANDLE_VALUE)
+  {
+    CloseHandle(iFile);
+  }
+  if(iConsole != INVALID_HANDLE_VALUE)
+  {
+    CloseHandle(iConsole);
+  }
+
+#else // !WIN32
+
+  iRval = do_main(argc, argv, envp, &iGlobalFileHandle, &iConsole);
+
+  // TODO:  restore default signal handlers?  disable signal handlers?
+
+  if(iGlobalFileHandle >= 0)
+  {
+#ifdef __FreeBSD__
+    flock(iGlobalFileHandle, LOCK_UN);
+#endif // __FreeBSD__
+    close(iGlobalFileHandle);
+    iGlobalFileHandle = -1; // TODO:  race condition?
+  }
+
   conrestore();
+
+  if(iConsole >= 0)
+  {
+    close(iConsole);
+  }
 #endif // WIN32
 
   return iRval;
@@ -234,6 +279,15 @@ void signalproc(int iSig)
 {
 static const char szMsg[]="\nError - exit on signal (console settings restored)\n";
 
+  if(iGlobalFileHandle != -1)
+  {
+#ifdef __FreeBSD__
+    flock(iGlobalFileHandle, LOCK_UN);
+#endif // __FreeBSD__
+    close(iGlobalFileHandle); // a hack for now
+    iGlobalFileHandle = -1;
+  }
+
   conrestore();
   write(2, szMsg, sizeof(szMsg) - 1);
 
@@ -243,10 +297,9 @@ static const char szMsg[]="\nError - exit on signal (console settings restored)\
 
 
 
-int do_main(int argc, char *argv[], char *envp[])
+int do_main(int argc, char *argv[], char *envp[], HANDLE *piFile, HANDLE *piConsole)
 {
 int i1;
-HANDLE iFile, iConsole; // for non-WIN32 'HANDLE' is defined as 'int'
 const char *p1;
 
 #ifndef WIN32
@@ -286,9 +339,9 @@ const char *p1;
 
 #ifdef WIN32
   if(!DuplicateHandle(GetCurrentProcess(), GetStdHandle(STD_INPUT_HANDLE),
-                     GetCurrentProcess(), &iConsole,
+                     GetCurrentProcess(), piConsole,
                      0, 0, DUPLICATE_SAME_ACCESS))
-  if(iConsole == INVALID_HANDLE_VALUE)
+  if(*piConsole == INVALID_HANDLE_VALUE)
 #else // WIN32
   // to allow testing windows in a 'virtualbox' VM I added the '-c' option, which
   // re-directs console I/O to a pipe, device, or socket.  device/pipe I/O is attempted
@@ -296,7 +349,7 @@ const char *p1;
 
   if(pAltConsole) // alternate console, for testing via tunnel to VM's serial port
   {
-    i1 = configure_alt_console(&iConsole); // NOTE:  this assigns 'iConsole'
+    i1 = configure_alt_console(piConsole); // NOTE:  this assigns 'iConsole'
     if(i1)
     {
       return i1; // an error
@@ -304,11 +357,11 @@ const char *p1;
   }
   else
   {
-    iConsole = dup(0); // copy of STDIN's handle
+    *piConsole = dup(0); // copy of STDIN's handle
   }
 
 
-  if(iConsole < 0)
+  if(*piConsole < 0)
 #endif // WIN32
   {
     fprintf(stderr, "Unable to dup console, %d\n", errno);
@@ -318,46 +371,62 @@ const char *p1;
 #ifndef WIN32
   if(pAltConsole) // if using alternate console, don't do 'conconfig'
   {
-    altconconfig(iConsole); // in case I must configure it like a console
+    altconconfig(*piConsole); // in case I must configure it like a console
   }
   else
 #endif // WIN32
   {
-    conconfig(iConsole); // configure the console (for windows it starts a thread)
+    conconfig(*piConsole); // configure the console (for windows it starts a thread)
   }
 
 #ifdef WIN32
-  iFile = CreateFile(pIn, GENERIC_READ | GENERIC_WRITE, 0,
-                     NULL, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, 0);
-  if(iFile == INVALID_HANDLE_VALUE)
-#else // WIN32
-#ifdef __FreeBSD__
-  iFile = open(pIn, (O_RDWR | O_NONBLOCK | O_EXLOCK), 0);
-#else // __FreeBSD__
-  iFile = open(pIn, (O_RDWR | O_NONBLOCK), 0); // Linux does not support O_EXLOCK
-#endif // __FreeBSD__
-  if(iFile < 0)
-#endif // WIN32
+
+  *piFile = CreateFile(pIn, GENERIC_READ | GENERIC_WRITE, 0,
+                       NULL, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, 0);
+  if(*piFile == INVALID_HANDLE_VALUE)
   {
     fprintf(stderr, "Unable to open %s\n", pIn);
-#ifdef WIN32
-    CloseHandle(iConsole);
-#else // WIN32
-    close(iConsole);
-#endif // WIN32
+    CloseHandle(*piConsole);
+    *piConsole = INVALID_HANDLE_VALUE;
     return -1;
   }
 
-  // TODO:  properly parse out the baud rate as BAUD,parity,bits,stop  i.e. "9600,n,8,1"
+#else // WIN32
 
-  ttyconfigSTR(iFile, szBaud);
-//  ttyconfig(iFile, 9600, 0, 8, 1);
+#ifdef __FreeBSD__
 
-  if(iResetWait >= 0)
+  *piFile = open(pIn, (O_RDWR | O_NONBLOCK /*| O_EXLOCK*/), 0);
+
+  if(*piFile >= 0)
   {
-    fputs("Reset Arduino via Serial Port\n", stdout);
-    fflush(stdout);
+    if(flock(*piFile, LOCK_EX | LOCK_NB)  < 0)
+    {
+      fprintf(stderr, "ERROR:  unable to lock \"%s\", errno=%d\n",
+              pIn, errno);
+      close(*piFile);
+      *piFile = -1;
+    }
   }
+#elif defined(__linux__) && defined(LINUX_SPECIAL_HANDLING)
+  *piFile = open(pIn, (O_RDWR | O_NOCTTY | O_NONBLOCK | O_NDELAY), 0); // Linux does not support O_EXLOCK and needs 'O_NOCTTY' and 'O_NDELAY'
+#else // !__FreeBSD__, !__linux__
+  *piFile = open(pIn, (O_RDWR | O_NONBLOCK), 0); // Linux does not support O_EXLOCK
+#endif // __FreeBSD__
+
+  if(*piFile < 0)
+  {
+    fprintf(stderr, "Unable to open %s\n", pIn);
+    close(*piConsole);
+    *piConsole = -1;
+    return -1;
+  }
+
+#endif // WIN32
+
+  // properly parse out the baud rate as BAUD,parity,bits,stop  i.e. "9600,n,8,1"
+  // and assign it
+
+  ttyconfigSTR(*piFile, szBaud); // POOBAH
 
   if(iExperimental)
   {
@@ -366,14 +435,20 @@ const char *p1;
     goto exit_point;
   }
 
+  if(iResetWait >= 0) // say something about it at this point (before I assign a default value)
+  {
+    fputs("Reset Arduino via Serial Port\n", stdout);
+    fflush(stdout);
+  }
+
   if(!iResetWait) // i.e. 'use default'
   {
     iResetWait = DEFAULT_RESET_WAIT;
   }
 
-  if(iResetWait > 0)
+  if(iResetWait > 0) // arduino reset using the RTS+DTR line
   {
-    reset_arduino(iFile);
+    reset_arduino(*piFile);
 
     fputs("Waiting for device reset to complete...", stdout);
     fflush(stdout);
@@ -389,9 +464,9 @@ const char *p1;
 
     MySleep(1000);
   }
-  else if(iFlowControl > 0)
+  else if(iFlowControl > 0) // only if there's no 'reset wait' - they ARE mutually exclusive!
   {
-    set_rts_dtr(iFile, 1); // this simply sets the RTS+DTR line to a 'LOW' state [necessary for flow control]
+    set_rts_dtr(*piFile, 1); // this simply sets the RTS+DTR line to a 'LOW' state [necessary for flow control]
   }
 
   if(!pszQuestion)
@@ -402,38 +477,56 @@ const char *p1;
 
   if(pszQuestion)
   {
-    question_loop(iFile, iConsole);
+    question_loop(*piFile, *piConsole);
   }
   else if(bRawFlag)
   {
-    console_loop(iFile, iConsole);
+    console_loop(*piFile, *piConsole);
   }
 #ifdef WITH_XMODEM
   else if(bXModemFlag)
   {
-    do_xmodem(iFile, iConsole);
+    do_xmodem(*piFile, *piConsole);
   }
 #endif // WITH_XMODEM
   else
   {
     // what I normally do
-    calibrate_loop(iFile, iConsole);
+    calibrate_loop(*piFile, *piConsole);
   }
 
   if(iResetWait >= 0 || iFlowControl > 0)
   {
-    set_rts_dtr(iFile, 0); // NOTE:  avrdude does this, setting RTS and DTR _LOW_ at this point - should I?
+    set_rts_dtr(*piFile, 0); // NOTE:  avrdude does this, setting RTS and DTR _LOW_ at this point - should I?
     // NOTE:  this forces a reset next time someone opens the device, so...
   }
 
 exit_point:
 #ifdef WIN32
-  CloseHandle(iFile);
-  CloseHandle(iConsole);
+
+  CloseHandle(*piFile);
+  CloseHandle(*piConsole);
+  *piFile = *piConsole = INVALID_HANDLE_VALUE;
+
 #else // WIN32
-  close(iFile);
+
+  // TODO:  restore default signal handlers?  disable signal handlers?
+
+  signal(SIGINT, SIG_DFL);  // SIG_IGN);
+  signal(SIGTSTP, SIG_DFL); // SIG_IGN);
+  signal(SIGTERM, SIG_DFL); // SIG_IGN);
+  signal(SIGUSR1, SIG_DFL); // SIG_IGN);
+  signal(SIGUSR2, SIG_DFL); // SIG_IGN);
+
+#ifdef __FreeBSD__
+  flock(*piFile, LOCK_UN);
+#endif // __FreeBSD__
+
+  close(*piFile); // I'm closing here [possible race condition?]
   conrestore();
-  close(iConsole);
+  close(*piConsole);
+  *piFile = *piConsole = -1;
+
 #endif // WIN32
 
   return 0;
@@ -492,7 +585,7 @@ int i1, optind;
       }
       else if(argv[optind][i1] == 'F')
       {
-        iFlowControl = 1; 
+        iFlowControl = 1;
         iResetWait = -1; // implies no reset wait as well
       }
       else if(argv[optind][i1] == 'W')
@@ -768,7 +861,7 @@ int i1;
           usage();
           return 1;
         }
-        
+
         // will send 'optarg' using specified line endings
 
         pszQuestion = malloc(strlen(optarg) + 2);
@@ -779,7 +872,7 @@ int i1;
         }
 
         memcpy(pszQuestion, optarg, strlen(optarg) + 1);
-        
+
         iResetWait = -1; // no reset wait implied
 
         break;
@@ -842,7 +935,7 @@ static void ttyconfigSTR(HANDLE iFile, char *szBaud)
       {
         iBaud = 9600;
       }
-    }      
+    }
     p1 = p2;
   }
 
@@ -867,7 +960,7 @@ static void ttyconfigSTR(HANDLE iFile, char *szBaud)
       {
         iParity = 0;
       }
-    }      
+    }
     p1 = p2;
   }
   if(*p1)
@@ -880,7 +973,7 @@ static void ttyconfigSTR(HANDLE iFile, char *szBaud)
       {
         iBits = 8;
       }
-    }      
+    }
     p1 = p2;
   }
   if(*p1)
@@ -893,7 +986,7 @@ static void ttyconfigSTR(HANDLE iFile, char *szBaud)
       {
         iStop = 1; // do NOT handle 1.5
       }
-    }      
+    }
     p1 = p2;
   }
 
@@ -1048,7 +1141,7 @@ int configure_alt_console(HANDLE *piConsole)
       if(pSA4 || pSA6)
       {
 //          char new_tbuf[256];
-//                
+//
 //          inet_ntop(pSA6 ? AF_INET6 : AF_INET,
 //                    (pSA6 ? (const struct sockaddr *)pSA6 : (const struct sockaddr *)pSA4),
 //                    new_tbuf, sizeof(new_tbuf));
@@ -1078,7 +1171,7 @@ int configure_alt_console(HANDLE *piConsole)
 //                        new_tbuf, sizeof(new_tbuf));
 //
 //              fprintf(stderr, "Cannot 'bind' to '%s' (%d, errno=%d) %p %p\n   %s\n", pName, i2, errno, pSA4, pSA6, new_tbuf);
-              
+
             return -9;
           }
 
@@ -1409,7 +1502,7 @@ void console_loop_debug_dump(int iDir, const void *pBuf0, int cbBuf)
 {
 const unsigned char *pBuf = (const unsigned char *)pBuf0;
 
-// dump I/O every 100 msecs or if buffer fills up 
+// dump I/O every 100 msecs or if buffer fills up
   if((clddDir && iDir && clddDir != iDir) ||
      (clddCountI > 0 /*&& clddDir < 0*/ && (MyGetTickCount() - clddTickI) >= 100) ||
      clddCountI >= sizeof(clddBufI) ||
@@ -1497,7 +1590,7 @@ const unsigned char *pBuf = (const unsigned char *)pBuf0;
     }
 
     clddTickO = MyGetTickCount();
-  }  
+  }
 }
 
 // direct console access
@@ -1545,7 +1638,7 @@ int iWasCR = 0;
 
       if(i1 > 0)
       {
-#ifndef WIN32      
+#ifndef WIN32
         if(pAltConsole) // no translation or 'local echo' if 'alt console'
         {
           if(Verbosity() >= VERBOSITY_CHATTY)
@@ -1707,7 +1800,7 @@ char *p1;
 
     free(p1);
   }
-  
+
   return;
 }
 
@@ -2075,7 +2168,7 @@ int bOldMyGetsEchoFlag;
     {
       break;
     }
-  } 
+  }
 
   bMyGetsEchoFlag = 1; // reset it (make sure)
   return pRval;
@@ -2168,7 +2261,7 @@ int bOldMyGetsEchoFlag;
 
     free(pRval);
     pRval = NULL;
-  } 
+  }
 
   bMyGetsEchoFlag = 1; // reset it (make sure)
   return pRval;
@@ -2300,7 +2393,7 @@ char *p1;
     *pdRval = atof(p1);
   }
 
-  free((void *)p1);  
+  free((void *)p1);
 
   return 0; // ok
 }
@@ -2347,7 +2440,7 @@ unsigned int dwStart;
   pEnd = p1 + MY_GETS_BUFSIZE - 1;
 
   do
-  {  
+  {
     i1 = my_pollin(iFile);
 
     if(!i1)
@@ -2462,7 +2555,7 @@ char c1, *pBuf, *p1, *pEnd;
   pEnd = p1 + MY_GETS_BUFSIZE - 1;
 
   do
-  {  
+  {
     i1 = my_pollin(iFile);
 
     if(!i1)
@@ -2629,7 +2722,7 @@ int i1;
     return 1;
   }
 
-  return 0;  // nothing  
+  return 0;  // nothing
 }
 
 void my_flush(HANDLE iFile)
@@ -2769,7 +2862,7 @@ void conrestore(void)
     close(hIOSConsoleRestoreHandle);
 #endif // WIN32
     hIOSConsoleRestoreHandle = -1;
-  }  
+  }
 }
 
 HANDLE conconfig(HANDLE iFile)
@@ -3087,6 +3180,10 @@ void ttyconfig(HANDLE iFile, int iBaud, int iParity, int iBits, int iStop)
 {
 int i1;
 struct termios sIOS;
+#if defined(__linux__) && defined(LINUX_SPECIAL_HANDLING)
+int bDoThisAgainForLinux = 0;
+#endif // defined(__linux__)
+
 
   i1 = fcntl(iFile, F_GETFL);
   if(bSerialDebug)
@@ -3114,9 +3211,20 @@ struct termios sIOS;
 #ifdef __CYGWIN__
     cfsetispeed(&sIOS, iBaud);
     cfsetospeed(&sIOS, iBaud);
-#else // __CYGWIN__
-    cfsetspeed(&sIOS, iBaud);
-#endif // __CYGWIN__
+#elif defined(__linux__) && defined(LINUX_SPECIAL_HANDLING)
+    if(cfsetspeed(&sIOS, iBaud) == -1) // a non-standard baud rate?
+    {
+//      bDoThisAgainForLinux = 1;
+      sIOS.c_cflag &= ~CBAUD;
+      sIOS.c_cflag |= CBAUDEX | ((CBAUDEX) << 16)/*BOTHER*/; // "other" baud rate (note BOTHER defined in asm-generic/termbits.h == CBAUDEX)
+
+      sIOS.c_ispeed = sIOS.c_ospeed = iBaud;
+
+      fprintf(stderr, "WARNING:  linux may not support %d baud\n", iBaud);
+    }
+#else // !__CYGWIN__, !__linux__
+    cfsetspeed(&sIOS, iBaud); // just do it
+#endif // __CYGWIN__, __linux__
     sIOS.c_cflag &= ~(CSIZE|PARENB|CS5|CS6|CS7|CS8);
     sIOS.c_cflag |= iBits == 5 ? CS5 : iBits == 6 ? CS6 : iBits == 7 ? CS7 : CS8; // 8 is default
     if(iStop == 2)
@@ -3193,6 +3301,36 @@ struct termios sIOS;
       fprintf(stderr, "SERIAL ATTRIBUTES (after)\n");
       dump_serial_attr(&sIOS);
     }
+
+#if defined(__linux__) && defined(LINUX_SPECIAL_HANDLING)
+    if(bDoThisAgainForLinux)
+    {
+      // this definition is derived from asm-generic/ioctls.h and asm-generic/termbits.h
+      struct termios2 // need to define this for the IOCTLs' sake
+      {
+        struct termios t;
+      };
+
+      if(ioctl(iFile, TCGETS2, &sIOS)) // re-get settings THIS way
+      {
+        fprintf(stderr, "error %d getting termios for baud rate change\n", errno);
+        dump_serial_attr(&sIOS);
+      }
+
+      sIOS.c_cflag &= ~CBAUD;
+      sIOS.c_cflag |= CBAUDEX | ((CBAUDEX) << 16)/*BOTHER*/; // "other" baud rate (note BOTHER defined in asm-generic/termbits.h == CBAUDEX)
+
+      sIOS.c_ispeed = sIOS.c_ospeed = iBaud;
+//      cfsetispeed(&sIOS, iBaud);
+//      cfsetospeed(&sIOS, iBaud);
+
+      if(ioctl(iFile, TCSETS2, &sIOS)) // must be done last
+      {
+        fprintf(stderr, "error %d setting baud rate\n", errno);
+        dump_serial_attr(&sIOS);
+      }
+    }
+#endif // __linux__
   }
   else
   {
@@ -3389,7 +3527,7 @@ try_again_two:
 #ifdef USE_CRITICAL_SECTION
     DWORD dwStart;
 
-try_again_one:    
+try_again_one:
 
     dwStart = MyGetTickCount();
     while(!TryEnterCriticalSection(pTtyCS))
@@ -3497,7 +3635,7 @@ int cbTotal = 0;
         }
 #endif // USE_CRITICAL_SECTION
       }
-      
+
       HeadTailPush(((char *)pBuf)[cbTotal], &iSerHTOutB, &iSerHTOutE,
                    aSerBufOut, sizeof(aSerBufOut));
     }
@@ -3766,7 +3904,7 @@ DCB sDCB;
   // From Docs:  A value of MAXDWORD, combined with zero values for both the
   // ReadTotalTimeoutConstant and ReadTotalTimeoutMultiplier members, specifies
   // that the read operation is to return immediately with the bytes that have
-  // already been received, even if no bytes have been received. 
+  // already been received, even if no bytes have been received.
   sCTM.ReadIntervalTimeout = MAXDWORD;
   sCTM.ReadTotalTimeoutMultiplier = 0;
   sCTM.ReadTotalTimeoutConstant = 0;
