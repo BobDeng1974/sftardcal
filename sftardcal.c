@@ -1035,10 +1035,14 @@ int configure_alt_console(HANDLE *piConsole)
 
       if(!bListenMode)
       {
-        unsigned long lTemp = htonl(INADDR_LOOPBACK); // localhost, 127.0.0.1
+        // this was unsigned long but still worked because dest is sockaddr_storage, not sockaddr_in
+        // and so if I used 'memcpy' with sizeof(unsigned long) it didn't overrun any buffers but
+        // only worked properly on 64-bit if the system was low endian.  this fixes it.
+        uint32_t ulTemp = htonl(INADDR_LOOPBACK); // localhost, 127.0.0.1
 
-        memcpy(&pSA4->sin_addr, &lTemp, sizeof(unsigned long)); // warning avoidance, should optimize ok
-//          *((unsigned long *)(&pSA4->sin_addr)) = htonl(INADDR_LOOPBACK); // localhost, 127.0.0.1
+        // this assigns 'sin_addr' assuming it's a uint32_t using memcpy to avoid certain irritating warnings
+        // while maintaining some compatibility across versions, OSs, etc.
+        memcpy(&(pSA4->sin_addr), &ulTemp, sizeof(uint32_t)); // assign using memcpy for warning avoidance; should optimize ok
       }
     }
     else if(*pAltConsole == '[') // required for ipv6 as "[ip:ad:dre:ss]:port"
@@ -1058,7 +1062,7 @@ int configure_alt_console(HANDLE *piConsole)
         *(p1 - 2) = 0;
       }
 
-      if(0 >= inet_pton(AF_INET6, pAltConsole, (struct sockaddr *)&sa))
+      if(0 >= inet_pton(AF_INET6, pAltConsole, &(pSA6->sin6_addr)))
       {
         fprintf(stderr, "Invalid alternate (ipv6?) console '%s'\n (must be '[IPv6]:port' or 'IP:port' or ':port')\n", pName);
         usage();
@@ -1074,7 +1078,8 @@ int configure_alt_console(HANDLE *piConsole)
       pSA4->sin_len = sizeof(*pSA4);
 #endif // __FreeBSD__
 
-      if(0 >= inet_pton(AF_INET, pAltConsole, (struct sockaddr *)&sa))
+      // this used to have &sa on it, but 'teh intarwebs' says it should be sin_addr (not sure why it might have worked before)
+      if(0 >= inet_pton(AF_INET, pAltConsole, &(pSA4->sin_addr))) //(struct sockaddr *)&sa))
       {
         fprintf(stderr, "Invalid alternate console '%s'\n (must be '[IPv6]:port' or 'IP:port' or ':port')\n", pName);
         usage();
