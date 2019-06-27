@@ -326,7 +326,22 @@ char cAL;
       if(iAX & 0x8000)
       {
         wCRC <<= 1;
-        wCRC ^= 0x1021;
+        wCRC ^= 0x1021; // this is the 'polynomial' - it is in 'normal' order.
+        // for explanation, and different ways this might be expressed mathematically, see
+        // https://en.wikipedia.org/wiki/Cyclic_redundancy_check#Polynomial_representations_of_cyclic_redundancy_checks
+        //
+        // it is known as CRC-16-CCITT or CRC-CCITT and sometimes expressed as x^16 + x^12 + x^5 + 1
+        //
+        //     reversed                forward
+        // 1111111000000000        0000000001111111
+        // 6543210987654321        1234567890123456
+        //
+        // 1000010000001000 8408H  0001000000100001 1021H (normal)
+        // 1000100000010000 8810H  0000100000010001 0811H (reciprocal)
+        //  ^^^ this appears to translate from the polynomial equation as bit coefficients assuming the '+1' is bit 0
+        //      that is, bits 16, 12, 5, and 0 are all '1'
+        //
+        // this equation may be better explained on the abovementioned web page.
       }
       else
       {
@@ -769,7 +784,7 @@ unsigned char buf[16];
 int cbBuf;
 #else // DEBUG_CODE
 unsigned char buf[2];
-#endif // DEBUG_CODE  
+#endif // DEBUG_CODE
 
   if(fcntl(ser, F_SETFL, O_NONBLOCK) == -1)
   {
@@ -785,14 +800,14 @@ unsigned char buf[2];
   ulStart = MyMillis();
 #ifdef DEBUG_CODE
   cbBuf = 0;
-#endif // DEBUG_CODE  
+#endif // DEBUG_CODE
   while((MyMillis() - ulStart) < 1000)
   {
 #ifdef DEBUG_CODE
     i1 = read(ser, &(buf[cbBuf]), 1);
-#else // DEBUG_CODE  
+#else // DEBUG_CODE
     i1 = read(ser, buf, 1);
-#endif // DEBUG_CODE  
+#endif // DEBUG_CODE
     if(i1 == 1)
     {
 #if defined(STAND_ALONE) && defined(DEBUG_CODE)
@@ -817,7 +832,7 @@ unsigned char buf[2];
     debug_dump_buffer(-1, buf, cbBuf);
   }
 #endif // STAND_ALONE, DEBUG_CODE
-  
+
 #endif // ARDUINO
 }
 
@@ -1012,7 +1027,7 @@ short i1, i2, i3;
     while(ecount < TOTAL_ERROR_COUNT && ec2 < ACK_ERROR_COUNT) // ** loop to get SOH or EOT character **
     {
       WriteXmodemChar(pX->ser, cY); // ** output appropriate command char **
-     
+
       if(GetXmodemBlock(pX->ser, &(pX->buf.xbuf.cSOH), 1) == 1)
       {
         if(pX->buf.xbuf.cSOH == _CAN_) // ** CTRL-X 'CAN' - terminate
@@ -1326,7 +1341,7 @@ long etotal, filesize, filepos, block;
     }
 
   } while(ecount < TOTAL_ERROR_COUNT /* * 2 */); // twice error count allowed for sending
-    
+
 // TODO: progress indicator
 //   If filesize& <> 0 And filepos& <= filesize& Then
 //      Form2!Label1.FloodPercent = 100 * filepos& / filesize&
@@ -1369,7 +1384,7 @@ int i1;
   for(i1=0; i1 < 8; i1++)
   {
     WriteXmodemChar(pX->ser, 'C'); // start with NAK for XMODEM CRC
-     
+
     if(GetXmodemBlock(pX->ser, &(pX->buf.xbuf.cSOH), 1) == 1)
     {
       if(pX->buf.xbuf.cSOH == _SOH_) // SOH - packet is on its way
@@ -1385,7 +1400,7 @@ int i1;
         return 1; // canceled
       }
     }
-  }    
+  }
 
   pX->bCRC = 0;
 
@@ -1393,7 +1408,7 @@ int i1;
   for(i1=0; i1 < 8; i1++)
   {
     WriteXmodemChar(pX->ser, _NAK_); // switch to NAK for XMODEM Checksum
-     
+
     if(GetXmodemBlock(pX->ser, &(pX->buf.xbuf.cSOH), 1) == 1)
     {
       if(pX->buf.xbuf.cSOH == _SOH_) // SOH - packet is on its way
@@ -1409,8 +1424,8 @@ int i1;
         return 1; // canceled
       }
     }
-  }    
-  
+  }
+
 
   XmodemTerminate(pX);
 
@@ -1463,7 +1478,7 @@ unsigned long ulStart;
         return 1; // canceled
       }
     }
-  }    
+  }
 #ifdef ARDUINO
   while((short)(millis() - ulStart) < 30000);   // 30 seconds
 #else // ARDUINO
@@ -1515,7 +1530,7 @@ XMODEM xx;
     return -9; // can't create file
   }
 
-  iRval = XReceiveSub(&xx);  
+  iRval = XReceiveSub(&xx);
 
   xx.file.close();
 
@@ -1544,7 +1559,7 @@ XMODEM xx;
     return -9; // can't open file
   }
 
-  iRval = XSendSub(&xx);  
+  iRval = XSendSub(&xx);
 
   xx.file.close();
 
@@ -1594,7 +1609,7 @@ int iFlags;
   iFlags = fcntl(hSer, F_GETFL);
 #endif // !ARDUINO
 
-  iRval = XReceiveSub(&xx);  
+  iRval = XReceiveSub(&xx);
 
 #if !defined(ARDUINO) && !defined(WIN32)
   if(iFlags == -1 || fcntl(hSer, F_SETFL, iFlags) == -1)
@@ -1660,7 +1675,7 @@ int iFlags;
   iFlags = fcntl(hSer, F_GETFL);
 #endif // !ARDUINO
 
-  iRval = XSendSub(&xx);  
+  iRval = XSendSub(&xx);
 
 #if !defined(ARDUINO) && !defined(WIN32)
   if(iFlags == -1 || fcntl(hSer, F_SETFL, iFlags) == -1)
@@ -1881,7 +1896,7 @@ int i1, iSR = 0;
 //  usleep(10000000);
   for(i1=0; i1 < 10; i1++)
   {
-    XModemFlushInput(hSer);  
+    XModemFlushInput(hSer);
   }
 
   for(i1=0; i1 < 3; i1++)
@@ -1893,7 +1908,7 @@ int i1, iSR = 0;
     WriteXmodemBlock(hSer, tbuf, strlen(tbuf));
 
     fputs("flush input\n", stderr);
-    XModemFlushInput(hSer);  
+    XModemFlushInput(hSer);
 
     // wait for an LF response
 
